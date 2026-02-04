@@ -1,0 +1,73 @@
+name:  AI  Deployment Optimizer
+
+on:
+   push:
+       branches:  [  main  ]
+
+jobs:
+    ai-deployment-decision:
+       runs-on:  ubuntu-latest
+       steps:
+          -  uses:  actions/checkout@v4
+
+          -  name:  Collect  diff summary
+               id: diff
+               run: |
+                  git  fetch  origin  main ||  true
+                  echo  "summary=$(git  log -1  --pretty=%B  |  tr  '\n' '  ')"  >>  $GITHUB_OUTPUT
+
+          -  name:  Build  test results  payload  (mock)
+              id:  tests
+              run:  |
+                  echo  'results={"status":"pass","coverage":85}' >>  $GITHUB_OUTPUT
+
+           - name:  Build  deployment  context
+              id:  context
+              run:  |
+                  cat <<EOF  >  context.json
+                  {
+                     "diff_summary":  "${{  steps.diff.outputs.summary  }}",
+                     "test_results":  {  "status": "pass",  "coverage":  85  },
+                     "service_risk_profile":  {  "criticality":  "high", "sla":  "99.9"  },
+                     "deployment_history":  {  "recent_failures":  0  }
+                 }
+                  EOF
+                  echo  "file=context.json"  >> $GITHUB_OUTPUT
+
+           -  name: Configure  AWS  credentials
+              uses:  aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id:  ${{  secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key:  ${{  secrets.AWS_SECRET_ACCESS_KEY  }}
+                 aws-region:  ${{  secrets.AWS_REGION  }}
+
+          -  name:  Invoke  AI Deployment  Advisor
+              id:  ai
+              run:  |
+                  DECISION=$(aws  lambda  invoke \
+                      --function-name  ai-deploy-opt-ai-deployment-advisor \
+                      --payload  fileb://${{ steps.context.outputs.file  }}  \
+                     --cli-binary-format  raw-in-base64-out  \
+                     /tmp/response.json  >/dev/null  2>&1  ||  true)
+                 cat  /tmp/response.json
+                  STRATEGY=$(jq  -r  '.body |  fromjson  |  .strategy'  /tmp/response.json)
+                 RISK=$(jq  -r  '.body  |  fromjson |  .risk_score'  /tmp/response.json)
+                  echo  "strategy=$STRATEGY" >>  $GITHUB_OUTPUT
+                  echo  "risk=$RISK"  >> $GITHUB_OUTPUT
+
+           -  name: Decide  whether  to  block
+              id:  gate
+              run:  |
+                  STRATEGY="${{ steps.ai.outputs.strategy  }}"
+                  RISK="${{  steps.ai.outputs.risk  }}"
+                 echo  "AI  strategy:  $STRATEGY,  risk: $RISK"
+                  if  [  "$STRATEGY"  = "block"  ];  then
+                     echo  "Deployment  blocked  by  AI."
+                     exit  1
+                  fi
+
+           -  name:  Trigger CodePipeline
+               run: |
+                  aws  codepipeline  start-pipeline-execution  \
+                     --name  ${{  secrets.CODEPIPELINE_NAME }}  \
+                      --cli-binary-format raw-in-base64-out
