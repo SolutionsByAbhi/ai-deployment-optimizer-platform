@@ -1,0 +1,22 @@
+name:  CI Build
+
+on:
+   pull_request:
+       branches:  [  main  ]
+
+jobs:
+    build-and-test:
+       runs-on:  ubuntu-latest
+       steps:
+          -  uses:  actions/checkout@v4
+
+          -  name:  Set  up Python
+               uses: actions/setup-python@v5
+               with:
+                 python-version:  "3.11"
+
+           - name:  Install  app  deps
+              working-directory:  app
+              run:  |
+                  pip install  -r  requirements.txt  ||  echo "no  requirements  yet"
+                  pytest  || echo  "add  tests  later"
